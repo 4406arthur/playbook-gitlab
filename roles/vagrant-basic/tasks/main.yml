@@ -1,0 +1,65 @@
+---
+- name: yum install tools and update all
+  yum: name='{{ item }}'
+  with_items:
+        - 'unzip,wget,curl,telnet,screen,ntp,ntpdate'
+
+# set hostname
+- name: set hostname
+  shell: '/usr/bin/hostnamectl set-hostname {{ hostname }}'
+  ignore_errors: yes
+  notify:
+    - reboot
+    - wait for reboot  
+
+# change time zone to UTC
+- name: remove localtime config
+  file: path=/etc/localtime state=absent
+
+- name: change time zone to UTC
+  command: /usr/bin/timedatectl set-timezone UTC
+
+# disable selinux
+- name: disable selinux
+  selinux: state=disabled
+  notify:
+    - reboot
+    - wait for reboot
+    
+# set ntp service enable
+- name: enalbe ntp service
+  service: name=ntpd enabled=yes state=started
+
+- name: copy ntp config
+  copy: src=ntp.conf dest=/etc/ntp.conf owner=root group=root mode=0644
+  notify:
+     - restart ntp
+
+# - name: Make sure iptables-services installed
+#   yum: name=iptables-services state=present
+#   tags: fw  
+
+# - name: Configure firewall to use iptables instead of default firewalld in CentOS
+#   shell: '{{ item }}'
+#   with_items:
+#      - systemctl stop firewalld
+#      - systemctl mask firewalld
+#      - systemctl enable iptables.service
+#   ignore_errors: yes
+#   tags: fw
+
+# - name: put /etc/sysconfig/iptables
+#   copy: src=iptables dest=/etc/sysconfig/iptables owner=root group=root mode=0600
+#   tags: fw
+
+# - name: reload firewall rule 
+#   shell: 'systemctl restart iptables'
+#   ignore_errors: yes
+#   tags: fw
+
+# copy sshd config
+- name: copy sshd config
+  copy: src=sshd_config dest=/etc/ssh/sshd_config owner=root group=root mode=0600
+  notify:
+     - restart sshd
+

@@ -1,0 +1,21 @@
+---
+# Handler to handle common notifications. Handlers are called by other plays.
+# See http://docs.ansible.com/playbooks_intro.html for more information about handlers.
+
+- name: restart ntp
+  service: name=ntpd state=restarted
+
+- name: restart sshd
+  service: name=sshd state=restarted
+
+# ansible 1.9.2
+- name: reboot
+  command: sleep 2 && shutdown -r now "Ansible updates triggered"
+  async: 1
+  poll: 0
+  ignore_errors: true
+
+# ansible 1.9.2
+- name: wait for reboot
+  local_action: wait_for host={{ inventory_hostname }} port={{ ansible_ssh_port }} search_regex=OpenSSH delay=30 timeout=120 state=started
+  sudo: false

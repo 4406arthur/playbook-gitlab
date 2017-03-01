@@ -1,0 +1,180 @@
+#Used to setup gitlab server
+- name: install the 'Development tools' package group
+  yum: name="@Development tools" state=present
+
+- name: install epel-release-7-2
+  yum: name=https://mirror.webtatic.com/yum/el7/epel-release.rpm state=present
+
+- name: install webstatic repostory
+  yum: name=https://mirror.webtatic.com/yum/el7/webtatic-release.rpm state=present
+
+- name: install REMI repostory
+  yum: name=http://rpms.famillecollet.com/enterprise/remi-release-7.rpm state=present
+
+- name: Remove httpd
+  yum: name=httpd state=absent
+
+#ruby part
+- name: Creates directory
+  file: path=/tmp/ruby state=directory
+  tags:
+    - install
+
+- name: download ruby-2.1.9.tar.gz
+  get_url:
+    url: https://cache.ruby-lang.org/pub/ruby/2.1/ruby-2.1.9.tar.gz
+    dest: /tmp/ruby/
+
+- name: unarchive ruby source
+  unarchive:
+    src: /tmp/ruby/ruby-2.1.9.tar.gz
+    dest: /tmp/ruby/
+    remote_src: True
+
+#compile ruby:
+- name: install Ruby
+  command: "{{ item }} chdir=/tmp/ruby/ruby-2.1.9"
+  environment:
+    PATH: /usr/local/bin:{{ ansible_env.PATH }}
+  with_items:
+    - ./configure --disable-install-rdoc
+    - make
+    - make prefix=/usr/local install
+    - gem install bundler --no-doc
+  tags:
+    - install
+
+#database part
+- name: install postgresql
+  yum: name={{item}} state=present
+  with_items:
+    - "postgresql-server" 
+    - "postgresql-devel"
+    - "postgresql-contrib" 
+  tags:
+    - install
+
+# Create git user, own gitlabhq_production db
+# - postgresql_user:
+#     db: gitlabhq_production
+#     name: git
+
+- name: install redis
+  yum: name=redis enablerepo=remi state=present
+  tags:
+    - install 
+
+- name: Configure redis to use sockets
+  shell: "{{item}}"
+  with_items:
+    - cp /etc/redis.conf /etc/redis.conf.orig
+    - sed 's/^port .*/port 0/' /etc/redis.conf.orig | sudo tee /etc/redis.conf
+    - echo 'unixsocket /var/run/redis/redis.sock' | sudo tee -a /etc/redis.conf
+    - echo -e 'unixsocketperm 0770' | sudo tee -a /etc/redis.conf
+    - chown redis:redis /var/run/redis
+    - chmod 755 /var/run/redis
+    - systemctl restart redis 
+  tags:
+    - install
+
+# Install packages using webtatic repostory
+- name: Install related packages
+  yum: name={{item.name}} enablerepo=webtatic-archive state={{item.state}}
+  with_items:
+    - {name: 'http://nginx.org/packages/centos/7/noarch/RPMS/nginx-release-centos-7-0.el7.ngx.noarch.rpm', state: 'present'}
+    - {name: 'nginx', state: 'present'}
+    - {name: 'readline', state: 'present'}
+    - {name: 'readline-devel', state: 'present'}
+    - {name: 'ncurses-devel', state: 'present'}
+    - {name: 'gdbm-devel', state: 'present'}
+    - {name: 'glibc-devel', state: 'present'}
+    - {name: 'tcl-devel', state: 'present'}
+    - {name: 'openssl-devel', state: 'present'}
+    - {name: 'curl-devel', state: 'present'}
+    - {name: 'expat-devel', state: 'present'}
+    - {name: 'db4-devel', state: 'present'}
+    - {name: 'libicu', state: 'present'}
+    - {name: 'libicu-devel', state: 'present'}
+    - {name: 'cmake', state: 'present'}
+    - {name: 'git', state: 'present'}
+    - {name: 'nodejs', state: 'present'}
+    - {name: 'golang', state: 'present'}
+    - {name: 'golang-bin', state: 'present'}
+    - {name: 'golang-src', state: 'present'}
+  tags:
+    - install
+
+- name: create a git user
+  user:
+    name: git
+    shell: /bin/bash
+    groups: admins
+    append: yes
+
+- name: pull gitlab source code
+  git: 
+    repo=https://gitlab.com/gitlab-org/gitlab-ce.git
+    dest=/home/git/gitlab
+    version=8-9-stable
+    clone=yes
+    force=yes
+  tags:
+    - getCode
+
+- name: Creates uploads directory
+  file: path=/home/git/gitlab/public/uploads state=directory
+  tags:
+    - install
+
+- name: use default gitlab config file
+  file:
+    src: '/home/git/gitlab/{{ item.src }}'
+    dest: '/home/git/gitlab/{{ item.dest }}'
+    state: link
+  with_items:
+    - { src: 'config/gitlab.yml.example', dest: 'config/gitlab.yml' }
+    - { src: 'config/secrets.yml.example', dest: 'config/secrets.yml' }
+    - { src: 'config/database.yml.postgresql', dest: 'config/database.yml' }
+    - { src: 'config/unicorn.rb.example', dest: 'config/unicorn.rb' }
+    - { src: 'config/resque.yml.example', dest: 'config/resque.yml' }
+    - { src: 'config/initializers/rack_attack.rb.example', dest: 'config/initializers/rack_attack.rb' }
+
+- name: Install Gems
+  command: "{{item}} chdir=/home/git/gitlab"
+  environment:
+    PATH: /usr/local/bin:{{ ansible_env.PATH }}
+  with_items:
+    - bundle install --deployment --without development test mysql aws kerberos
+
+- name: pull gitlab-workhorse
+  git: 
+    repo=https://gitlab.com/gitlab-org/gitlab-workhorse.git
+    dest=/home/git/gitlab-workhorse
+    version=v0.7.5
+    clone=yes
+    force=yes
+  tags:
+    - getCode
+
+- name: compile gitlab-workhorse
+  command: make
+  args:
+    chdir: /home/git/gitlab-workhorse
+  tags:
+    - install
+
+# Copy gitlab-site conf
+- name: Configure default website to listen on unix socket
+  template: src=gitlab.j2 dest=/etc/nginx/conf.d/gitlab.conf
+  notify:
+    - restart services
+
+# Make log folder
+- name: make sure log folder exists with the correct permission
+  when: logPath is defined
+  file: path={{logPath}} owner=nginx group=nginx mode=744 state=directory
+  tags: getCode
+
+#Configure to start NGINX and starts on boot
+- name: Configure nginx service
+  service: name=nginx state=started enabled=yes

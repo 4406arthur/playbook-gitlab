@@ -1,0 +1,9 @@
+#!/bin/sh
+logPath={{logPath}}
+
+echo "####### start rotate log at `date +%Y-%m-%d-%H:%M:%S` #########"
+
+# delete file older than 30 days
+find $logPath -type f -ctime +30 -name "*.gz" -exec rm -rf {} \;
+
+echo "####### finish rotate log at `date +%Y-%m-%d-%H:%M:%S` #########"
